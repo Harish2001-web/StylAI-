@@ -1,5 +1,5 @@
 {
-  "name": "StyleSense",
+  "name": "stylAi",
   "description": "Generative AI-powered fashion recommendation system with virtual try-on and digital wardrobe management.",
   "requestFramePermissions": ["camera"]
 }

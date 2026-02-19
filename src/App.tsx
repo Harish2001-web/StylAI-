@@ -15,7 +15,8 @@ import {
   Crown
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
-import { analyzeGarment, getStylistAdvice, generateVirtualTryOn, WardrobeItem } from './services/geminiService';
+import { analyzeGarment, getStylistAdvice, generateVirtualTryOn } from './services/geminiService';
+import { WardrobeItem } from './types';
 
 // --- Components ---
 
@@ -77,11 +78,13 @@ export default function App() {
   const [loading, setLoading] = useState(false);
   const [stylistChat, setStylistChat] = useState<{role: 'user' | 'ai', text: string}[]>([]);
   const [query, setQuery] = useState('');
+  const [hasApiKey, setHasApiKey] = useState(false);
   
   // Try-on state
   const [userPhoto, setUserPhoto] = useState<string | null>(null);
-  const [selectedItem, setSelectedItem] = useState<WardrobeItem | null>(null);
+  const [selectedItems, setSelectedItems] = useState<WardrobeItem[]>([]);
   const [tryOnResult, setTryOnResult] = useState<string | null>(null);
+  const [tryOnProgress, setTryOnProgress] = useState<{ current: number, total: number } | null>(null);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -97,7 +100,22 @@ export default function App() {
     };
     checkHealth();
     fetchWardrobe();
+    checkApiKey();
   }, []);
+
+  const checkApiKey = async () => {
+    if (window.aistudio?.hasSelectedApiKey) {
+      const hasKey = await window.aistudio.hasSelectedApiKey();
+      setHasApiKey(hasKey);
+    }
+  };
+
+  const handleOpenKeySelector = async () => {
+    if (window.aistudio?.openSelectKey) {
+      await window.aistudio.openSelectKey();
+      setHasApiKey(true);
+    }
+  };
 
   const fetchWardrobe = async () => {
     const res = await fetch('/api/wardrobe');
@@ -203,16 +221,56 @@ export default function App() {
   };
 
   const handleTryOn = async () => {
-    if (!userPhoto || !selectedItem) return;
+    if (!userPhoto || selectedItems.length === 0) return;
+    
+    // Warn user if they are doing multi-layer without a Pro key
+    if (selectedItems.length > 1 && !hasApiKey) {
+      const proceed = confirm("Multi-layer try-on is resource-intensive and may hit free tier limits. For the best experience, please connect a Pro API key in the header. Proceed anyway?");
+      if (!proceed) return;
+    }
+
     setLoading(true);
+    setTryOnProgress({ current: 0, total: selectedItems.length });
+    
     try {
-      const result = await generateVirtualTryOn(userPhoto, selectedItem.image_data, "Virtual try on");
-      setTryOnResult(result);
-    } catch (err) {
+      let currentBaseImage = userPhoto;
+      
+      for (let i = 0; i < selectedItems.length; i++) {
+        setTryOnProgress({ current: i + 1, total: selectedItems.length });
+        const item = selectedItems[i];
+        
+        // Add a small delay between layers to avoid hitting rate limits on free tier
+        if (i > 0) await new Promise(resolve => setTimeout(resolve, 1500));
+
+        const result = await generateVirtualTryOn(
+          currentBaseImage, 
+          item.image_data, 
+          `Layering ${item.category} (${item.color}) onto the person. Step ${i + 1} of ${selectedItems.length}.`
+        );
+        
+        if (result) {
+          currentBaseImage = result;
+          setTryOnResult(result);
+        }
+      }
+    } catch (err: any) {
       console.error(err);
+      alert(err.message || "Try-on failed");
     } finally {
       setLoading(false);
+      setTryOnProgress(null);
     }
+  };
+
+  const toggleItemSelection = (item: WardrobeItem) => {
+    setSelectedItems(prev => {
+      const isSelected = prev.find(i => i.id === item.id);
+      if (isSelected) {
+        return prev.filter(i => i.id !== item.id);
+      } else {
+        return [...prev, item];
+      }
+    });
   };
 
   return (
@@ -230,11 +288,20 @@ export default function App() {
             <Crown size={20} className="text-white fill-current" />
           </div>
           <div>
-            <h1 className="text-2xl font-bold tracking-tighter font-serif italic">StyleSense</h1>
+            <h1 className="text-2xl font-bold tracking-tighter font-serif italic">stylAi</h1>
             <p className="text-[8px] uppercase tracking-[0.3em] text-white/40 font-bold -mt-1">Couture Intelligence</p>
           </div>
         </div>
         <div className="flex items-center gap-6">
+          <button 
+            onClick={handleOpenKeySelector}
+            className={`flex items-center gap-2 px-4 py-2 rounded-full border transition-all duration-300 ${hasApiKey ? 'border-emerald-500/30 bg-emerald-500/5 text-emerald-400' : 'border-brand-primary/30 bg-brand-primary/5 text-brand-primary hover:bg-brand-primary/10'}`}
+          >
+            <div className={`w-2 h-2 rounded-full ${hasApiKey ? 'bg-emerald-500 animate-pulse' : 'bg-brand-primary animate-pulse'}`} />
+            <span className="text-[10px] uppercase tracking-widest font-bold">
+              {hasApiKey ? 'Pro Active' : 'Connect Pro Key'}
+            </span>
+          </button>
           <button className="p-2 text-white/40 hover:text-brand-primary transition-all duration-300">
             <ShoppingBag size={22} />
           </button>
@@ -455,10 +522,38 @@ export default function App() {
                       <div className="w-8 h-8 rounded-full bg-brand-secondary/20 flex items-center justify-center text-brand-secondary">
                         <Shirt size={16} />
                       </div>
-                      The Garment
+                      Layering Queue
                     </h3>
                     <span className="text-[10px] uppercase tracking-widest text-white/30 font-bold">Step 02</span>
                   </div>
+
+                  {selectedItems.length > 0 ? (
+                    <div className="flex gap-3 overflow-x-auto pb-4 custom-scrollbar">
+                      {selectedItems.map((item, idx) => (
+                        <div key={`${item.id}-${idx}`} className="relative group flex-shrink-0">
+                          <div className="w-16 h-16 rounded-xl overflow-hidden border border-brand-primary/50 shadow-lg shadow-brand-primary/10">
+                            <img src={item.image_data} className="w-full h-full object-cover" />
+                          </div>
+                          <div className="absolute -top-2 -right-2 w-5 h-5 bg-brand-primary text-white text-[10px] rounded-full flex items-center justify-center font-bold">
+                            {idx + 1}
+                          </div>
+                          <button 
+                            onClick={() => toggleItemSelection(item)}
+                            className="absolute inset-0 bg-black/60 opacity-0 group-hover:opacity-100 flex items-center justify-center transition-opacity rounded-xl"
+                          >
+                            <Trash2 size={12} className="text-red-400" />
+                          </button>
+                        </div>
+                      ))}
+                      <div className="w-16 h-16 rounded-xl border border-dashed border-white/10 flex items-center justify-center text-white/10 flex-shrink-0">
+                        <Plus size={16} />
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="p-6 border border-dashed border-white/5 rounded-2xl text-center">
+                      <p className="text-xs text-white/20 uppercase tracking-widest">Select items below to build your look</p>
+                    </div>
+                  )}
                   
                   {Object.entries(
                     wardrobe.reduce((acc, item) => {
@@ -471,15 +566,23 @@ export default function App() {
                     <div key={category} className="space-y-3">
                       <h4 className="text-[10px] uppercase tracking-[0.2em] text-white/30 font-bold ml-1">{category}</h4>
                       <div className="flex gap-4 overflow-x-auto pb-4 custom-scrollbar snap-x">
-                        {(items as WardrobeItem[]).map(item => (
-                          <button 
-                            key={item.id}
-                            onClick={() => setSelectedItem(item)}
-                            className={`flex-shrink-0 w-24 h-24 rounded-2xl overflow-hidden border-2 transition-all duration-500 snap-center ${selectedItem?.id === item.id ? 'border-brand-primary scale-110 shadow-lg shadow-brand-primary/20' : 'border-transparent opacity-40 hover:opacity-100'}`}
-                          >
-                            <img src={item.image_data} className="w-full h-full object-cover" />
-                          </button>
-                        ))}
+                        {(items as WardrobeItem[]).map(item => {
+                          const isSelected = selectedItems.some(i => i.id === item.id);
+                          return (
+                            <button 
+                              key={item.id}
+                              onClick={() => toggleItemSelection(item)}
+                              className={`flex-shrink-0 w-24 h-24 rounded-2xl overflow-hidden border-2 transition-all duration-500 snap-center relative ${isSelected ? 'border-brand-primary scale-110 shadow-lg shadow-brand-primary/20' : 'border-transparent opacity-40 hover:opacity-100'}`}
+                            >
+                              <img src={item.image_data} className="w-full h-full object-cover" />
+                              {isSelected && (
+                                <div className="absolute inset-0 bg-brand-primary/20 flex items-center justify-center">
+                                  <CheckCircle2 size={24} className="text-white" />
+                                </div>
+                              )}
+                            </button>
+                          );
+                        })}
                       </div>
                     </div>
                   ))}
@@ -487,7 +590,7 @@ export default function App() {
 
                 <button 
                   onClick={handleTryOn}
-                  disabled={loading || !userPhoto || !selectedItem}
+                  disabled={loading || !userPhoto || selectedItems.length === 0}
                   className="group relative w-full h-20 bg-white text-black rounded-[2rem] font-black text-xl overflow-hidden transition-all duration-500 hover:scale-[1.02] active:scale-[0.98] disabled:opacity-50"
                 >
                   <div className="absolute inset-0 bg-gradient-to-r from-brand-primary to-brand-secondary opacity-0 group-hover:opacity-10 transition-opacity duration-500" />
@@ -538,7 +641,11 @@ export default function App() {
                       </div>
                       <div className="text-center">
                         <p className="text-2xl font-serif italic text-white mb-2">Neural Draping</p>
-                        <p className="text-[10px] uppercase tracking-[0.4em] text-brand-primary font-black animate-pulse">Processing Style DNA</p>
+                        {tryOnProgress && (
+                          <p className="text-[10px] uppercase tracking-[0.4em] text-brand-primary font-black animate-pulse">
+                            Layering {tryOnProgress.current} of {tryOnProgress.total}
+                          </p>
+                        )}
                       </div>
                     </div>
                   )}
